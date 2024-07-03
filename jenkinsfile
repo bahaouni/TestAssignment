@@ -1,0 +1,58 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_HUB_CREDENTIALS = credentials('docker-hub-credentials')
+        SERVER_SSH_CREDENTIALS = credentials('server-ssh-credentials')
+        DOCKER_HUB_USERNAME = "${DOCKER_HUB_CREDENTIALS_USR}"
+        DOCKER_HUB_PASSWORD = "${DOCKER_HUB_CREDENTIALS_PSW}"
+        SERVER_USER = "${SERVER_SSH_CREDENTIALS_USR}"
+        SERVER_SSH_KEY = "${SERVER_SSH_CREDENTIALS_PSW}"
+        SERVER_HOST = 'your.server.ip.or.hostname'
+        SERVER_SSH_PORT = '22'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Build Docker Images') {
+            steps {
+                script {
+                    docker.withRegistry('https://registry.hub.docker.com', 'docker-hub-credentials') {
+                        def frontendImage = docker.build("${DOCKER_HUB_USERNAME}/frontend:latest", "-f Dockerfile.client ./client")
+                        def backendImage = docker.build("${DOCKER_HUB_USERNAME}/backend:latest", "-f Dockerfile.server ./server")
+
+                        frontendImage.push()
+                        backendImage.push()
+                    }
+                }
+            }
+        }
+        stage('Deploy to Server') {
+            steps {
+                sshagent(['server-ssh-credentials']) {
+                    script {
+                        sh """
+                        ssh -o StrictHostKeyChecking=no -i ${SERVER_SSH_KEY} ${SERVER_USER}@${SERVER_HOST} -p ${SERVER_SSH_PORT} << EOF
+                        docker pull ${DOCKER_HUB_USERNAME}/frontend:latest
+                        docker pull ${DOCKER_HUB_USERNAME}/backend:latest
+                        cd /path/to/your/docker-compose-directory
+                        docker-compose down
+                        docker-compose up -d
+                        EOF
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}
